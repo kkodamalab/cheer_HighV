@@ -67,11 +67,17 @@ audio:false
 });
 
 video.srcObject = stream;
+
 await video.play();
+
+// 👇追加（重要）
+await new Promise(resolve => {
+  video.onloadedmetadata = () => resolve();
+});
 
 canvas.width = video.videoWidth;
 canvas.height = video.videoHeight;
-
+  
 pose = new Pose({
 locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
 });

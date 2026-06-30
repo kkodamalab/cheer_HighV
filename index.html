@@ -73,7 +73,7 @@
       display: none;
       align-items: center;
       justify-content: center;
-      background: #000;
+      background: rgba(0, 0, 0, 0.35);
       color: #fff;
       font-size: 28vw;
       font-weight: bold;
@@ -113,6 +113,7 @@
       <div id="controlRow">
         <button id="startCameraBtn">カメラ開始</button>
         <button id="evalBtn" disabled>5秒後に評価</button>
+        <button id="resumeBtn" disabled>ライブに戻る</button>
       </div>
       <div id="info">開始ボタンを押してください</div>
       <div id="advice">アドバイス: -</div>
@@ -127,12 +128,14 @@
     const adviceEl = document.getElementById("advice");
     const startCameraBtn = document.getElementById("startCameraBtn");
     const evalBtn = document.getElementById("evalBtn");
+    const resumeBtn = document.getElementById("resumeBtn");
     const countdownOverlay = document.getElementById("countdownOverlay");
 
     let pose = null;
     let stream = null;
     let running = false;
     let speakingCooldown = 0;
+
     let frozenCanvas = null;
     let frozenMode = false;
     let countdownActive = false;
@@ -246,8 +249,6 @@
       return {
         lShoulder, lElbow, lWrist,
         rShoulder, rElbow, rWrist,
-        lElbowAngle, rElbowAngle,
-        lArmRaw, rArmRaw,
         leftArmDiff, rightArmDiff,
         leftElbowDiff, rightElbowDiff,
         armError, elbowError,
@@ -303,15 +304,42 @@
       drawLine(rE, idealRightEnd, "yellow", 3, [6, 6]);
     }
 
-    function onResults(results) {
-      if (countdownActive) return;
+    function renderEvaluation(results) {
+      const evalData = evaluateHighV(results.poseLandmarks);
 
+      drawFrozenBackground();
+
+      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
+        color: "#60a5fa",
+        lineWidth: 4
+      });
+      drawLandmarks(ctx, results.poseLandmarks, {
+        color: "#22c55e",
+        fillColor: "#22c55e",
+        radius: 4
+      });
+      drawIdealOverlay(evalData);
+
+      info.innerHTML =
+        `肘ズレ: ${evalData.elbowError.toFixed(1)}°<br>` +
+        `腕ズレ: ${evalData.armError.toFixed(1)}°<br>` +
+        `左腕ズレ: ${evalData.leftArmDiff.toFixed(1)}° / 右腕ズレ: ${evalData.rightArmDiff.toFixed(1)}°`;
+
+      adviceEl.innerHTML = `アドバイス: ${evalData.adviceText}`;
+      speak(evalData.adviceText);
+    }
+
+    function onResults(results) {
       if (!results.poseLandmarks) {
-        if (!frozenMode) {
+        if (!frozenMode && !countdownActive) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           info.innerHTML = "人物未検出";
           adviceEl.innerHTML = "アドバイス: -";
         }
+        return;
+      }
+
+      if (countdownActive) {
         return;
       }
 
@@ -327,35 +355,17 @@
           radius: 4
         });
         info.innerHTML = "5秒後に評価 を押してください";
-      } else {
-        const evalData = evaluateHighV(results.poseLandmarks);
-        drawFrozenBackground();
-        drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
-          color: "#60a5fa",
-          lineWidth: 4
-        });
-        drawLandmarks(ctx, results.poseLandmarks, {
-          color: "#22c55e",
-          fillColor: "#22c55e",
-          radius: 4
-        });
-        drawIdealOverlay(evalData);
-
-        info.innerHTML =
-          `肘ズレ: ${evalData.elbowError.toFixed(1)}°<br>` +
-          `腕ズレ: ${evalData.armError.toFixed(1)}°<br>` +
-          `左腕ズレ: ${evalData.leftArmDiff.toFixed(1)}° / 右腕ズレ: ${evalData.rightArmDiff.toFixed(1)}°`;
-
-        adviceEl.innerHTML = `アドバイス: ${evalData.adviceText}`;
-        speak(evalData.adviceText);
+        adviceEl.innerHTML = "アドバイス: -";
       }
     }
 
     async function processLoop() {
-      if (!running || countdownActive || frozenMode) return;
+      if (!running) return;
+
       if (video.readyState >= 2) {
-        await pose.send({ image: video });
+        const results = await pose.send({ image: video });
       }
+
       requestAnimationFrame(processLoop);
     }
 
@@ -395,6 +405,7 @@
 
         running = true;
         evalBtn.disabled = false;
+        resumeBtn.disabled = true;
         info.textContent = "人物を映してください";
         processLoop();
       } catch (err) {
@@ -404,31 +415,42 @@
       }
     }
 
-    function stopCameraStream() {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        stream = null;
-      }
-      video.srcObject = null;
-      running = false;
-    }
-
-    async function captureAndEvaluate() {
-      if (!video.videoWidth || !video.videoHeight) return;
-
+    async function captureCurrentFrame() {
       frozenCanvas = document.createElement("canvas");
       frozenCanvas.width = video.videoWidth;
       frozenCanvas.height = video.videoHeight;
       const frozenCtx = frozenCanvas.getContext("2d");
       frozenCtx.drawImage(video, 0, 0, frozenCanvas.width, frozenCanvas.height);
 
-      stopCameraStream();
-
+      // スクショ画像でPose評価
       frozenMode = true;
-      countdownActive = false;
-      countdownOverlay.style.display = "none";
+      resumeBtn.disabled = false;
 
-      await pose.send({ image: frozenCanvas });
+      const tempResults = await new Promise((resolve) => {
+        const tempPose = new Pose({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        tempPose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        tempPose.onResults((results) => resolve(results));
+        tempPose.send({ image: frozenCanvas });
+      });
+
+      if (tempResults.poseLandmarks) {
+        renderEvaluation(tempResults);
+      } else {
+        drawFrozenBackground();
+        info.innerHTML = "人物未検出";
+        adviceEl.innerHTML = "アドバイス: -";
+      }
     }
 
     async function startCountdownEvaluation() {
@@ -436,12 +458,10 @@
 
       countdownActive = true;
       frozenMode = false;
+      resumeBtn.disabled = true;
 
       info.innerHTML = "撮影準備中…";
       adviceEl.innerHTML = "アドバイス: -";
-
-      video.style.display = "none";
-      canvas.style.display = "none";
 
       countdownOverlay.style.display = "flex";
       countdownOverlay.textContent = "5";
@@ -449,21 +469,32 @@
       let count = 5;
       const timer = setInterval(async () => {
         count -= 1;
+
         if (count >= 0) {
           countdownOverlay.textContent = String(count);
         }
 
         if (count < 0) {
           clearInterval(timer);
-          video.style.display = "";
-          canvas.style.display = "";
-          await captureAndEvaluate();
+          countdownOverlay.style.display = "none";
+          countdownActive = false;
+          await captureCurrentFrame();
         }
       }, 1000);
     }
 
+    function resumeLive() {
+      frozenMode = false;
+      frozenCanvas = null;
+      resumeBtn.disabled = true;
+      info.innerHTML = "ライブ表示に戻りました";
+      adviceEl.innerHTML = "アドバイス: -";
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
     startCameraBtn.addEventListener("click", startCamera);
     evalBtn.addEventListener("click", startCountdownEvaluation);
+    resumeBtn.addEventListener("click", resumeLive);
   </script>
 </body>
 </html>

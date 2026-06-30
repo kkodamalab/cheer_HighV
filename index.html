@@ -74,11 +74,11 @@
       display: none;
       align-items: center;
       justify-content: center;
-      background: #000;
+      background: transparent;
       color: #fff;
       font-size: 28vw;
       font-weight: bold;
-      text-shadow: 0 4px 20px rgba(0,0,0,0.8);
+      text-shadow: 0 4px 20px rgba(0,0,0,0.9);
       pointer-events: none;
     }
 
@@ -236,7 +236,6 @@
       const lArmRaw = lineAngleDeg(lShoulder, lWrist);
       const rArmRaw = lineAngleDeg(rShoulder, rWrist);
 
-      // 画像座標系（上がマイナス）
       const idealLeftArm = -45;
       const idealRightArm = -135;
 
@@ -274,6 +273,15 @@
       ctx.drawImage(frozenCanvas, 0, 0, canvas.width, canvas.height);
     }
 
+    function drawPoint(p, color, radius = 5) {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     function drawIdealOverlay(evalData) {
       const {
         lShoulder, lElbow, lWrist,
@@ -287,50 +295,35 @@
       const lW = toPx(lWrist);
       const rW = toPx(rWrist);
 
-      // 現在の上腕長・前腕長
       const leftUpperLen = distPx(lShoulder, lElbow);
       const leftForeLen = distPx(lElbow, lWrist);
       const rightUpperLen = distPx(rShoulder, rElbow);
       const rightForeLen = distPx(rElbow, rWrist);
 
-      // 理想角度
       const idealLeftArm = -45;
       const idealRightArm = -135;
 
-      // 理想肘・理想手首を再計算
       const idealLeftElbow = pointFromAngle(lS, leftUpperLen, idealLeftArm);
       const idealLeftWrist = pointFromAngle(idealLeftElbow, leftForeLen, idealLeftArm);
 
       const idealRightElbow = pointFromAngle(rS, rightUpperLen, idealRightArm);
       const idealRightWrist = pointFromAngle(idealRightElbow, rightForeLen, idealRightArm);
 
-      // 現在腕（緑）
       drawLine(lS, lE, "#00ff88", 6);
       drawLine(lE, lW, "#00ff88", 6);
       drawLine(rS, rE, "#00ff88", 6);
       drawLine(rE, rW, "#00ff88", 6);
 
-      // 理想腕（黄色点線） ← 修正ポイント
       drawLine(lS, idealLeftElbow, "yellow", 4, [10, 8]);
       drawLine(idealLeftElbow, idealLeftWrist, "yellow", 4, [10, 8]);
 
       drawLine(rS, idealRightElbow, "yellow", 4, [10, 8]);
       drawLine(idealRightElbow, idealRightWrist, "yellow", 4, [10, 8]);
 
-      // 参考として理想肘・理想手首に小さな点
       drawPoint(idealLeftElbow, "yellow", 5);
       drawPoint(idealLeftWrist, "yellow", 5);
       drawPoint(idealRightElbow, "yellow", 5);
       drawPoint(idealRightWrist, "yellow", 5);
-    }
-
-    function drawPoint(p, color, radius = 5) {
-      ctx.save();
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
     }
 
     function renderFrozenResult() {
@@ -359,11 +352,11 @@
     }
 
     function onResults(results) {
-      if (countdownActive || frozenMode) return;
+      if (frozenMode) return;
 
       if (!results.poseLandmarks) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        info.innerHTML = "人物未検出";
+        info.innerHTML = countdownActive ? "カウントダウン中…" : "人物未検出";
         adviceEl.innerHTML = "アドバイス: -";
         return;
       }
@@ -380,12 +373,12 @@
         radius: 4
       });
 
-      info.innerHTML = "5秒後に評価 を押してください";
-      adviceEl.innerHTML = "アドバイス: -";
+      info.innerHTML = countdownActive ? "カウントダウン中…" : "5秒後に評価 を押してください";
+      adviceEl.innerHTML = countdownActive ? "アドバイス: 姿勢をキープしてください" : "アドバイス: -";
     }
 
     async function processLoop() {
-      if (!running || countdownActive || frozenMode) return;
+      if (!running || frozenMode) return;
       if (video.readyState >= 2) {
         await pose.send({ image: video });
       }
@@ -399,9 +392,7 @@
         frozenCanvas = null;
         frozenResults = null;
         frozenEvalData = null;
-
-        video.style.display = "";
-        canvas.style.display = "";
+        countdownOverlay.style.display = "none";
 
         startCameraBtn.disabled = true;
         info.textContent = "カメラを起動しています…";
@@ -459,22 +450,6 @@
       running = false;
     }
 
-    async function captureAndEvaluate() {
-      if (!video.videoWidth || !video.videoHeight) return;
-
-      frozenCanvas = document.createElement("canvas");
-      frozenCanvas.width = video.videoWidth;
-      frozenCanvas.height = video.videoHeight;
-      const frozenCtx = frozenCanvas.getContext("2d");
-      frozenCtx.drawImage(video, 0, 0, frozenCanvas.width, frozenCanvas.height);
-
-      const results = await pose.send({ image: frozenCanvas });
-
-      // pose.send は戻り値で results を返さないため、
-      // 一時的に専用処理で再解析する
-      await analyzeFrozenFrame();
-    }
-
     async function analyzeFrozenFrame() {
       let resolved = false;
 
@@ -521,6 +496,18 @@
       await tempPose.send({ image: frozenCanvas });
     }
 
+    async function captureAndEvaluate() {
+      if (!video.videoWidth || !video.videoHeight) return;
+
+      frozenCanvas = document.createElement("canvas");
+      frozenCanvas.width = video.videoWidth;
+      frozenCanvas.height = video.videoHeight;
+      const frozenCtx = frozenCanvas.getContext("2d");
+      frozenCtx.drawImage(video, 0, 0, frozenCanvas.width, frozenCanvas.height);
+
+      await analyzeFrozenFrame();
+    }
+
     async function startCountdownEvaluation() {
       if (!running) return;
 
@@ -528,12 +515,8 @@
       frozenMode = false;
       backLiveBtn.disabled = true;
 
-      info.innerHTML = "撮影準備中…";
-      adviceEl.innerHTML = "アドバイス: -";
-
-      // ライブ映像を見せない
-      video.style.display = "none";
-      canvas.style.display = "none";
+      info.innerHTML = "カウントダウン中…";
+      adviceEl.innerHTML = "アドバイス: 姿勢をキープしてください";
 
       countdownOverlay.style.display = "flex";
       countdownOverlay.textContent = "5";
@@ -548,11 +531,6 @@
 
         if (count < 0) {
           clearInterval(timer);
-
-          // 0の瞬間を撮影後、静止画表示に切り替え
-          video.style.display = "";
-          canvas.style.display = "";
-
           await captureAndEvaluate();
         }
       }, 1000);

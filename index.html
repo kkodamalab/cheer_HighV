@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ハイブイ評価（シンプル版）</title>
+
+<style>
+body{
+margin:0;
+background:#0b1020;
+color:white;
+font-family:sans-serif;
+text-align:center;
+}
+
+video,canvas{
+position:absolute;
+top:0;
+left:0;
+width:100%;
+height:100%;
+object-fit:cover;
+}
+
+#ui{
+position:relative;
+z-index:10;
+padding:10px;
+}
+
+#info{
+background:rgba(0,0,0,0.5);
+padding:10px;
+border-radius:10px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+<div id="info">カメラ起動中...</div>
+</div>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<script type="module">
+
+import {Pose} from "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+import {drawConnectors, drawLandmarks} from "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js";
+import {POSE_CONNECTIONS} from "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const info = document.getElementById("info");
+
+let pose;
+
+async function init(){
+
+const stream = await navigator.mediaDevices.getUserMedia({
+video:{facingMode:"user"},
+audio:false
+});
+
+video.srcObject = stream;
+await video.play();
+
+canvas.width = video.videoWidth;
+canvas.height = video.videoHeight;
+
+pose = new Pose({
+locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
+
+pose.setOptions({
+modelComplexity:1,
+minDetectionConfidence:0.5,
+minTrackingConfidence:0.5
+});
+
+pose.onResults(onResults);
+
+loop();
+}
+
+function loop(){
+pose.send({image:video});
+requestAnimationFrame(loop);
+}
+
+function angle(a,b,c){
+const ab=[a.x-b.x,a.y-b.y];
+const cb=[c.x-b.x,c.y-b.y];
+const dot=ab[0]*cb[0]+ab[1]*cb[1];
+const magA=Math.hypot(...ab);
+const magC=Math.hypot(...cb);
+return Math.acos(dot/(magA*magC))*180/Math.PI;
+}
+
+function armAngle(s,w){
+const dx = w.x - s.x;
+const dy = w.y - s.y;
+return Math.abs(Math.atan2(dy,dx)*180/Math.PI);
+}
+
+let lastSpeak=0;
+
+function speak(text){
+const now = Date.now();
+if(now - lastSpeak < 3000) return;
+lastSpeak = now;
+
+const uttr = new SpeechSynthesisUtterance(text);
+uttr.lang = "ja-JP";
+speechSynthesis.speak(uttr);
+}
+
+function onResults(res){
+
+ctx.clearRect(0,0,canvas.width,canvas.height);
+
+if(!res.poseLandmarks) return;
+
+drawConnectors(ctx,res.poseLandmarks,POSE_CONNECTIONS);
+drawLandmarks(ctx,res.poseLandmarks);
+
+const lm = res.poseLandmarks;
+
+// 左
+const lShoulder = lm[11];
+const lElbow = lm[13];
+const lWrist = lm[15];
+
+// 右
+const rShoulder = lm[12];
+const rElbow = lm[14];
+const rWrist = lm[16];
+
+// 肘角度
+const lElbowAngle = angle(lShoulder,lElbow,lWrist);
+const rElbowAngle = angle(rShoulder,rElbow,rWrist);
+
+// 腕角度
+const lArm = armAngle(lShoulder,lWrist);
+const rArm = armAngle(rShoulder,rWrist);
+
+// 理想との差
+const elbowError = Math.abs(180 - (lElbowAngle+rElbowAngle)/2);
+const armError = Math.abs(45 - (lArm+rArm)/2);
+
+// 色表示（ズレ大→赤）
+const color = (elbowError+armError < 20) ? "lime" : "red";
+
+ctx.strokeStyle = color;
+ctx.lineWidth = 6;
+
+// 強調描画
+ctx.beginPath();
+ctx.moveTo(lShoulder.x*canvas.width, lShoulder.y*canvas.height);
+ctx.lineTo(lWrist.x*canvas.width, lWrist.y*canvas.height);
+ctx.stroke();
+
+ctx.beginPath();
+ctx.moveTo(rShoulder.x*canvas.width, rShoulder.y*canvas.height);
+ctx.lineTo(rWrist.x*canvas.width, rWrist.y*canvas.height);
+ctx.stroke();
+
+// 表示
+info.innerHTML = `
+肘ズレ: ${elbowError.toFixed(1)}°<br>
+腕ズレ: ${armError.toFixed(1)}°
+`;
+
+// アドバイス
+if(elbowError > 15){
+speak("肘をもっと伸ばしてください");
+}
+else if(armError > 15){
+speak("腕をもっと上げてください");
+}
+else{
+speak("とても良いです");
+}
+
+}
+
+init();
+
+</script>
+
+</body>
+</html>

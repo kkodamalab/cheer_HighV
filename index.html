@@ -1,235 +1,260 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ハイブイ評価（修正版）</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ハイブイ評価</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #0b1020;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
 
-<style>
-body{
-margin:0;
-background:#0b1020;
-color:white;
-font-family:sans-serif;
-text-align:center;
-}
+    #stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #000;
+    }
 
-video,canvas{
-position:absolute;
-top:0;
-left:0;
-width:100%;
-height:100%;
-object-fit:cover;
-}
+    video, canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
 
-#ui{
-position:relative;
-z-index:10;
-padding:10px;
-}
+    #ui {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-start;
+    }
 
-#info{
-background:rgba(0,0,0,0.6);
-padding:10px;
-border-radius:10px;
-font-size:18px;
-}
-</style>
+    #startBtn {
+      padding: 10px 14px;
+      font-size: 16px;
+      border: none;
+      border-radius: 10px;
+      background: #2563eb;
+      color: #fff;
+    }
+
+    #info {
+      background: rgba(0, 0, 0, 0.65);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 18px;
+      line-height: 1.5;
+      min-width: 180px;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 </head>
-
 <body>
+  <div id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
 
-<div id="ui">
-<div id="info">カメラ起動中…</div>
-</div>
+    <div id="ui">
+      <button id="startBtn">開始</button>
+      <div id="info">開始ボタンを押してください</div>
+    </div>
+  </div>
 
-<video id="video" autoplay playsinline muted></video>
-<canvas id="canvas"></canvas>
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const info = document.getElementById("info");
+    const startBtn = document.getElementById("startBtn");
 
-<script type="module">
+    let pose = null;
+    let stream = null;
+    let running = false;
+    let speakingCooldown = 0;
 
-import {Pose} from "https://cdn.jsdelivr.net/npm/@mediapipe/pose";
-import {drawConnectors, drawLandmarks} from "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils";
-import {POSE_CONNECTIONS} from "https://cdn.jsdelivr.net/npm/@mediapipe/pose";
+    function angle(a, b, c) {
+      const ab = [a.x - b.x, a.y - b.y];
+      const cb = [c.x - b.x, c.y - b.y];
+      const dot = ab[0] * cb[0] + ab[1] * cb[1];
+      const magA = Math.hypot(ab[0], ab[1]);
+      const magC = Math.hypot(cb[0], cb[1]);
+      const cos = Math.max(-1, Math.min(1, dot / (magA * magC)));
+      return Math.acos(cos) * 180 / Math.PI;
+    }
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const info = document.getElementById("info");
+    function armAngle(shoulder, wrist) {
+      const dx = wrist.x - shoulder.x;
+      const dy = wrist.y - shoulder.y;
+      return Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    }
 
-let pose;
+    function speak(text) {
+      const now = Date.now();
+      if (now - speakingCooldown < 3000) return;
+      speakingCooldown = now;
 
-// =======================
-// 初期化
-// =======================
-async function init(){
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const uttr = new SpeechSynthesisUtterance(text);
+      uttr.lang = "ja-JP";
+      window.speechSynthesis.speak(uttr);
+    }
 
-const stream = await navigator.mediaDevices.getUserMedia({
-video:{facingMode:"user"},
-audio:false
-});
+    function resizeCanvasToVideo() {
+      canvas.width = video.videoWidth || 720;
+      canvas.height = video.videoHeight || 1280;
+    }
 
-video.srcObject = stream;
+    async function waitForVideoReady(videoEl) {
+      if (videoEl.readyState >= 2 && videoEl.videoWidth > 0) return;
 
-// ▶ここ重要（確実に再生）
-await video.play();
+      await new Promise((resolve) => {
+        const done = () => {
+          videoEl.removeEventListener("loadeddata", done);
+          videoEl.removeEventListener("loadedmetadata", done);
+          resolve();
+        };
+        videoEl.addEventListener("loadeddata", done, { once: true });
+        videoEl.addEventListener("loadedmetadata", done, { once: true });
+      });
+    }
 
-// ▶ここが今回の修正ポイント（待機）
-await new Promise(resolve=>{
-  video.onloadeddata = ()=>resolve();
-});
+    function onResults(results) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-// サイズ設定
-canvas.width = video.videoWidth;
-canvas.height = video.videoHeight;
+      if (!results.poseLandmarks) {
+        info.innerHTML = "人物未検出";
+        return;
+      }
 
-// MediaPipe
-pose = new Pose({
-locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-});
+      drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
+        color: "#60a5fa",
+        lineWidth: 4
+      });
+      drawLandmarks(ctx, results.poseLandmarks, {
+        color: "#22c55e",
+        fillColor: "#22c55e",
+        radius: 4
+      });
 
-pose.setOptions({
-modelComplexity:1,
-minDetectionConfidence:0.5,
-minTrackingConfidence:0.5
-});
+      const lm = results.poseLandmarks;
 
-pose.onResults(onResults);
+      const lShoulder = lm[11];
+      const lElbow = lm[13];
+      const lWrist = lm[15];
 
-// ▶ここで初めてループ開始
-loop();
-}
+      const rShoulder = lm[12];
+      const rElbow = lm[14];
+      const rWrist = lm[16];
 
-// =======================
-// ループ
-// =======================
-function loop(){
+      const lElbowAngle = angle(lShoulder, lElbow, lWrist);
+      const rElbowAngle = angle(rShoulder, rElbow, rWrist);
 
-// ▶ここも修正ポイント
-if(video.readyState >= 2){
-  pose.send({image: video});
-}
+      const lArm = armAngle(lShoulder, lWrist);
+      const rArm = armAngle(rShoulder, rWrist);
 
-requestAnimationFrame(loop);
-}
+      const elbowError = Math.abs(180 - (lElbowAngle + rElbowAngle) / 2);
+      const armError = Math.abs(45 - (lArm + rArm) / 2);
 
-// =======================
-// 角度計算
-// =======================
-function angle(a,b,c){
-const ab=[a.x-b.x,a.y-b.y];
-const cb=[c.x-b.x,c.y-b.y];
-const dot=ab[0]*cb[0]+ab[1]*cb[1];
-const magA=Math.hypot(...ab);
-const magC=Math.hypot(...cb);
-return Math.acos(dot/(magA*magC))*180/Math.PI;
-}
+      const good = (elbowError + armError < 20);
+      const color = good ? "lime" : "red";
 
-function armAngle(s,w){
-const dx = w.x - s.x;
-const dy = w.y - s.y;
-return Math.abs(Math.atan2(dy,dx)*180/Math.PI);
-}
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 6;
 
-// =======================
-// 音声
-// =======================
-let lastSpeak = 0;
+      ctx.beginPath();
+      ctx.moveTo(lShoulder.x * canvas.width, lShoulder.y * canvas.height);
+      ctx.lineTo(lWrist.x * canvas.width, lWrist.y * canvas.height);
+      ctx.stroke();
 
-function speak(text){
-const now = Date.now();
-if(now - lastSpeak < 3000) return;
-lastSpeak = now;
+      ctx.beginPath();
+      ctx.moveTo(rShoulder.x * canvas.width, rShoulder.y * canvas.height);
+      ctx.lineTo(rWrist.x * canvas.width, rWrist.y * canvas.height);
+      ctx.stroke();
 
-const uttr = new SpeechSynthesisUtterance(text);
-uttr.lang = "ja-JP";
-speechSynthesis.speak(uttr);
-}
+      info.innerHTML =
+        `肘ズレ: ${elbowError.toFixed(1)}°<br>` +
+        `腕ズレ: ${armError.toFixed(1)}°`;
 
-// =======================
-// 結果処理
-// =======================
-function onResults(res){
+      if (elbowError > 15) {
+        speak("肘をもっと伸ばしてください");
+      } else if (armError > 15) {
+        speak("腕をもっと上げてください");
+      } else {
+        speak("とても良いです");
+      }
+    }
 
-ctx.clearRect(0,0,canvas.width,canvas.height);
+    async function processLoop() {
+      if (!running) return;
+      if (video.readyState >= 2) {
+        await pose.send({ image: video });
+      }
+      requestAnimationFrame(processLoop);
+    }
 
-if(!res.poseLandmarks){
-  info.innerText = "人物未検出";
-  return;
-}
+    async function startApp() {
+      try {
+        startBtn.disabled = true;
+        info.textContent = "カメラを起動しています…";
 
-// デバッグ（動作確認用）
-console.log("pose OK");
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user",
+            width: { ideal: 720 },
+            height: { ideal: 1280 }
+          },
+          audio: false
+        });
 
-drawConnectors(ctx,res.poseLandmarks,POSE_CONNECTIONS);
-drawLandmarks(ctx,res.poseLandmarks);
+        video.srcObject = stream;
+        await video.play();
+        await waitForVideoReady(video);
+        resizeCanvasToVideo();
 
-const lm = res.poseLandmarks;
+        pose = new Pose({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
 
-// 左
-const lShoulder = lm[11];
-const lElbow = lm[13];
-const lWrist = lm[15];
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
 
-// 右
-const rShoulder = lm[12];
-const rElbow = lm[14];
-const rWrist = lm[16];
+        pose.onResults(onResults);
 
-// 肘
-const lElbowAngle = angle(lShoulder,lElbow,lWrist);
-const rElbowAngle = angle(rShoulder,rElbow,rWrist);
+        running = true;
+        info.textContent = "人物を映してください";
+        processLoop();
+      } catch (err) {
+        console.error(err);
+        info.innerHTML = "起動失敗<br>カメラ許可とHTTPSを確認";
+        startBtn.disabled = false;
+      }
+    }
 
-// 腕
-const lArm = armAngle(lShoulder,lWrist);
-const rArm = armAngle(rShoulder,rWrist);
-
-// ズレ
-const elbowError = Math.abs(180 - (lElbowAngle+rElbowAngle)/2);
-const armError = Math.abs(45 - (lArm+rArm)/2);
-
-// 色
-const good = (elbowError + armError < 20);
-ctx.strokeStyle = good ? "lime" : "red";
-ctx.lineWidth = 6;
-
-// 強調描画
-ctx.beginPath();
-ctx.moveTo(lShoulder.x*canvas.width, lShoulder.y*canvas.height);
-ctx.lineTo(lWrist.x*canvas.width, lWrist.y*canvas.height);
-ctx.stroke();
-
-ctx.beginPath();
-ctx.moveTo(rShoulder.x*canvas.width, rShoulder.y*canvas.height);
-ctx.lineTo(rWrist.x*canvas.width, rWrist.y*canvas.height);
-ctx.stroke();
-
-// 表示
-info.innerHTML = `
-肘ズレ: ${elbowError.toFixed(1)}°<br>
-腕ズレ: ${armError.toFixed(1)}°
-`;
-
-// 音声
-if(elbowError > 15){
-  speak("肘をもっと伸ばしてください");
-}
-else if(armError > 15){
-  speak("腕をもっと上げてください");
-}
-else{
-  speak("とても良いです");
-}
-
-}
-
-// =======================
-// 実行
-// =======================
-init();
-
-</script>
-
+    startBtn.addEventListener("click", startApp);
+  </script>
 </body>
 </html>

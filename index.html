@@ -42,24 +42,53 @@
       flex-direction: column;
       gap: 10px;
       align-items: flex-start;
+      pointer-events: none;
     }
 
-    #startBtn {
+    #controlRow {
+      pointer-events: auto;
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
       padding: 10px 14px;
       font-size: 16px;
       border: none;
       border-radius: 10px;
       background: #2563eb;
       color: #fff;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #countdown {
+      font-size: 48px;
+      font-weight: bold;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+      min-height: 56px;
     }
 
     #info {
-      background: rgba(0, 0, 0, 0.65);
+      background: rgba(0, 0, 0, 0.68);
       padding: 10px 12px;
       border-radius: 10px;
       font-size: 18px;
       line-height: 1.5;
-      min-width: 180px;
+      min-width: 220px;
+    }
+
+    #advice {
+      background: rgba(0, 0, 0, 0.68);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 18px;
+      line-height: 1.5;
+      min-width: 220px;
     }
   </style>
 
@@ -72,8 +101,13 @@
     <canvas id="canvas"></canvas>
 
     <div id="ui">
-      <button id="startBtn">開始</button>
+      <div id="controlRow">
+        <button id="startCameraBtn">カメラ開始</button>
+        <button id="evalBtn" disabled>5秒後に評価</button>
+      </div>
+      <div id="countdown"></div>
       <div id="info">開始ボタンを押してください</div>
+      <div id="advice">アドバイス: -</div>
     </div>
   </div>
 
@@ -82,12 +116,18 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const info = document.getElementById("info");
-    const startBtn = document.getElementById("startBtn");
+    const adviceEl = document.getElementById("advice");
+    const countdownEl = document.getElementById("countdown");
+    const startCameraBtn = document.getElementById("startCameraBtn");
+    const evalBtn = document.getElementById("evalBtn");
 
     let pose = null;
     let stream = null;
     let running = false;
     let speakingCooldown = 0;
+    let latestResults = null;
+    let evaluationPending = false;
+    let evaluationDone = false;
 
     function angle(a, b, c) {
       const ab = [a.x - b.x, a.y - b.y];
@@ -99,17 +139,31 @@
       return Math.acos(cos) * 180 / Math.PI;
     }
 
-    function armAngle(shoulder, wrist) {
-      const dx = wrist.x - shoulder.x;
-      const dy = wrist.y - shoulder.y;
-      return Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+    function lineAngleDeg(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      return Math.atan2(dy, dx) * 180 / Math.PI;
+    }
+
+    function normalizeAngleDiff(deg) {
+      let d = deg;
+      while (d > 180) d -= 360;
+      while (d < -180) d += 360;
+      return d;
+    }
+
+    function pointFromAngle(start, lengthPx, angleDeg) {
+      const rad = angleDeg * Math.PI / 180;
+      return {
+        x: start.x + lengthPx * Math.cos(rad),
+        y: start.y + lengthPx * Math.sin(rad),
+      };
     }
 
     function speak(text) {
       const now = Date.now();
-      if (now - speakingCooldown < 3000) return;
+      if (now - speakingCooldown < 2500) return;
       speakingCooldown = now;
-
       if (!("speechSynthesis" in window)) return;
       window.speechSynthesis.cancel();
       const uttr = new SpeechSynthesisUtterance(text);
@@ -124,7 +178,6 @@
 
     async function waitForVideoReady(videoEl) {
       if (videoEl.readyState >= 2 && videoEl.videoWidth > 0) return;
-
       await new Promise((resolve) => {
         const done = () => {
           videoEl.removeEventListener("loadeddata", done);
@@ -136,11 +189,118 @@
       });
     }
 
+    function drawLine(p1, p2, color, width = 5, dash = []) {
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function evaluateHighV(lm) {
+      const lShoulder = lm[11];
+      const lElbow = lm[13];
+      const lWrist = lm[15];
+
+      const rShoulder = lm[12];
+      const rElbow = lm[14];
+      const rWrist = lm[16];
+
+      const lElbowAngle = angle(lShoulder, lElbow, lWrist);
+      const rElbowAngle = angle(rShoulder, rElbow, rWrist);
+
+      const lArmRaw = lineAngleDeg(lShoulder, lWrist);
+      const rArmRaw = lineAngleDeg(rShoulder, rWrist);
+
+      // 画像座標系なので理想は左 -45°, 右 -135°
+      const idealLeftArm = -45;
+      const idealRightArm = -135;
+
+      const leftArmDiff = normalizeAngleDiff(lArmRaw - idealLeftArm);
+      const rightArmDiff = normalizeAngleDiff(rArmRaw - idealRightArm);
+
+      const leftElbowDiff = 180 - lElbowAngle;
+      const rightElbowDiff = 180 - rElbowAngle;
+
+      const armError = (Math.abs(leftArmDiff) + Math.abs(rightArmDiff)) / 2;
+      const elbowError = (Math.abs(leftElbowDiff) + Math.abs(rightElbowDiff)) / 2;
+
+      let adviceText = "とても良いです";
+      if (elbowError > 15) {
+        adviceText = "肘をもっと伸ばしてください";
+      } else if (armError > 15) {
+        adviceText = "腕をもっと斜め上に上げてください";
+      }
+
+      return {
+        lShoulder, lElbow, lWrist,
+        rShoulder, rElbow, rWrist,
+        lElbowAngle, rElbowAngle,
+        lArmRaw, rArmRaw,
+        leftArmDiff, rightArmDiff,
+        leftElbowDiff, rightElbowDiff,
+        armError, elbowError,
+        adviceText,
+      };
+    }
+
+    function drawIdealOverlay(evalData) {
+      const {
+        lShoulder, rShoulder,
+        lElbow, rElbow,
+        lWrist, rWrist,
+      } = evalData;
+
+      // 理想腕線（黄色）
+      const leftLen = Math.hypot(
+        (lWrist.x - lShoulder.x) * canvas.width,
+        (lWrist.y - lShoulder.y) * canvas.height
+      );
+      const rightLen = Math.hypot(
+        (rWrist.x - rShoulder.x) * canvas.width,
+        (rWrist.y - rShoulder.y) * canvas.height
+      );
+
+      const lS = { x: lShoulder.x * canvas.width, y: lShoulder.y * canvas.height };
+      const rS = { x: rShoulder.x * canvas.width, y: rShoulder.y * canvas.height };
+
+      const idealLeftEnd = pointFromAngle(lS, leftLen, -45);
+      const idealRightEnd = pointFromAngle(rS, rightLen, -135);
+
+      drawLine(lS, idealLeftEnd, "yellow", 4, [10, 8]);
+      drawLine(rS, idealRightEnd, "yellow", 4, [10, 8]);
+
+      // 現在腕線（赤 or 緑）
+      const lW = { x: lWrist.x * canvas.width, y: lWrist.y * canvas.height };
+      const rW = { x: rWrist.x * canvas.width, y: rWrist.y * canvas.height };
+      drawLine(lS, lW, "#00ff88", 6);
+      drawLine(rS, rW, "#00ff88", 6);
+
+      // 肘の理想伸展線（黄色）
+      const lE = { x: lElbow.x * canvas.width, y: lElbow.y * canvas.height };
+      const rE = { x: rElbow.x * canvas.width, y: rElbow.y * canvas.height };
+
+      drawLine(lS, lE, "yellow", 3, [6, 6]);
+      drawLine(lE, idealLeftEnd, "yellow", 3, [6, 6]);
+
+      drawLine(rS, rE, "yellow", 3, [6, 6]);
+      drawLine(rE, idealRightEnd, "yellow", 3, [6, 6]);
+    }
+
     function onResults(results) {
+      latestResults = results;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (!results.poseLandmarks) {
-        info.innerHTML = "人物未検出";
+        if (!evaluationDone) {
+          info.innerHTML = "人物未検出";
+          adviceEl.innerHTML = "アドバイス: -";
+        }
         return;
       }
 
@@ -154,51 +314,24 @@
         radius: 4
       });
 
-      const lm = results.poseLandmarks;
+      if (!evaluationDone) {
+        info.innerHTML = "5秒後に評価 を押してください";
+      }
 
-      const lShoulder = lm[11];
-      const lElbow = lm[13];
-      const lWrist = lm[15];
+      if (evaluationPending) {
+        evaluationPending = false;
+        evaluationDone = true;
 
-      const rShoulder = lm[12];
-      const rElbow = lm[14];
-      const rWrist = lm[16];
+        const evalData = evaluateHighV(results.poseLandmarks);
+        drawIdealOverlay(evalData);
 
-      const lElbowAngle = angle(lShoulder, lElbow, lWrist);
-      const rElbowAngle = angle(rShoulder, rElbow, rWrist);
+        info.innerHTML =
+          `肘ズレ: ${evalData.elbowError.toFixed(1)}°<br>` +
+          `腕ズレ: ${evalData.armError.toFixed(1)}°<br>` +
+          `左腕ズレ: ${evalData.leftArmDiff.toFixed(1)}° / 右腕ズレ: ${evalData.rightArmDiff.toFixed(1)}°`;
 
-      const lArm = armAngle(lShoulder, lWrist);
-      const rArm = armAngle(rShoulder, rWrist);
-
-      const elbowError = Math.abs(180 - (lElbowAngle + rElbowAngle) / 2);
-      const armError = Math.abs(45 - (lArm + rArm) / 2);
-
-      const good = (elbowError + armError < 20);
-      const color = good ? "lime" : "red";
-
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 6;
-
-      ctx.beginPath();
-      ctx.moveTo(lShoulder.x * canvas.width, lShoulder.y * canvas.height);
-      ctx.lineTo(lWrist.x * canvas.width, lWrist.y * canvas.height);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(rShoulder.x * canvas.width, rShoulder.y * canvas.height);
-      ctx.lineTo(rWrist.x * canvas.width, rWrist.y * canvas.height);
-      ctx.stroke();
-
-      info.innerHTML =
-        `肘ズレ: ${elbowError.toFixed(1)}°<br>` +
-        `腕ズレ: ${armError.toFixed(1)}°`;
-
-      if (elbowError > 15) {
-        speak("肘をもっと伸ばしてください");
-      } else if (armError > 15) {
-        speak("腕をもっと上げてください");
-      } else {
-        speak("とても良いです");
+        adviceEl.innerHTML = `アドバイス: ${evalData.adviceText}`;
+        speak(evalData.adviceText);
       }
     }
 
@@ -210,9 +343,9 @@
       requestAnimationFrame(processLoop);
     }
 
-    async function startApp() {
+    async function startCamera() {
       try {
-        startBtn.disabled = true;
+        startCameraBtn.disabled = true;
         info.textContent = "カメラを起動しています…";
 
         stream = await navigator.mediaDevices.getUserMedia({
@@ -245,16 +378,41 @@
         pose.onResults(onResults);
 
         running = true;
+        evalBtn.disabled = false;
         info.textContent = "人物を映してください";
         processLoop();
       } catch (err) {
         console.error(err);
         info.innerHTML = "起動失敗<br>カメラ許可とHTTPSを確認";
-        startBtn.disabled = false;
+        startCameraBtn.disabled = false;
       }
     }
 
-    startBtn.addEventListener("click", startApp);
+    async function startCountdownEvaluation() {
+      if (!running) return;
+
+      evaluationDone = false;
+      adviceEl.innerHTML = "アドバイス: -";
+      countdownEl.textContent = "5";
+
+      let count = 5;
+      const timer = setInterval(() => {
+        count -= 1;
+        if (count > 0) {
+          countdownEl.textContent = String(count);
+        } else {
+          clearInterval(timer);
+          countdownEl.textContent = "0";
+          evaluationPending = true;
+          setTimeout(() => {
+            countdownEl.textContent = "";
+          }, 800);
+        }
+      }, 1000);
+    }
+
+    startCameraBtn.addEventListener("click", startCamera);
+    evalBtn.addEventListener("click", startCountdownEvaluation);
   </script>
 </body>
 </html>

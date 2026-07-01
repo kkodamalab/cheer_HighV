@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ハイブイ評価（理想線修正版）</title>
+  <title>ハイブイ評価（符号修正版）</title>
   <style>
     html, body {
       margin: 0;
@@ -145,19 +145,6 @@
       return Math.acos(cos) * 180 / Math.PI;
     }
 
-    function lineAngleDeg(p1, p2) {
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      return Math.atan2(dy, dx) * 180 / Math.PI;
-    }
-
-    function normalizeAngleDiff(deg) {
-      let d = deg;
-      while (d > 180) d -= 360;
-      while (d < -180) d += 360;
-      return d;
-    }
-
     function distPx(p1, p2) {
       return Math.hypot(
         (p2.x - p1.x) * canvas.width,
@@ -192,6 +179,15 @@
       ctx.restore();
     }
 
+    function drawPoint(p, color, radius = 5) {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     function speak(text) {
       const now = Date.now();
       if (now - speakingCooldown < 2500) return;
@@ -221,6 +217,16 @@
       });
     }
 
+    // 0°=水平、45°=理想ハイブイ、90°=真上
+    // 戻り値が正 → 理想より高い（上げすぎ）
+    // 戻り値が負 → 理想より低い（下げすぎ）
+    function armElevationDiff(shoulder, wrist) {
+      const dx = Math.abs((wrist.x - shoulder.x) * canvas.width);
+      const dy = (shoulder.y - wrist.y) * canvas.height; // wristが肩より上なら正
+      const elevDeg = Math.atan2(dy, Math.max(dx, 1e-6)) * 180 / Math.PI;
+      return elevDeg - 45;
+    }
+
     function evaluateHighV(lm) {
       const lShoulder = lm[11];
       const lElbow = lm[13];
@@ -233,36 +239,33 @@
       const lElbowAngle = angle(lShoulder, lElbow, lWrist);
       const rElbowAngle = angle(rShoulder, rElbow, rWrist);
 
-      const lArmRaw = lineAngleDeg(lShoulder, lWrist);
-      const rArmRaw = lineAngleDeg(rShoulder, rWrist);
-
-      const idealLeftArm = -45;
-      const idealRightArm = -135;
-
-      const leftArmDiff = normalizeAngleDiff(lArmRaw - idealLeftArm);
-      const rightArmDiff = normalizeAngleDiff(rArmRaw - idealRightArm);
+      const leftArmDiff = armElevationDiff(lShoulder, lWrist);
+      const rightArmDiff = armElevationDiff(rShoulder, rWrist);
 
       const leftElbowDiff = 180 - lElbowAngle;
       const rightElbowDiff = 180 - rElbowAngle;
 
       const armError = (Math.abs(leftArmDiff) + Math.abs(rightArmDiff)) / 2;
       const elbowError = (Math.abs(leftElbowDiff) + Math.abs(rightElbowDiff)) / 2;
+      const meanArmDiff = (leftArmDiff + rightArmDiff) / 2;
 
       let adviceText = "とても良いです";
       if (elbowError > 15) {
         adviceText = "肘をもっと伸ばしてください";
-      } else if (armError > 15) {
+      } else if (meanArmDiff < -8) {
         adviceText = "腕をもっと斜め上に上げてください";
+      } else if (meanArmDiff > 8) {
+        adviceText = "腕を少し下げてください";
       }
 
       return {
         lShoulder, lElbow, lWrist,
         rShoulder, rElbow, rWrist,
         lElbowAngle, rElbowAngle,
-        lArmRaw, rArmRaw,
         leftArmDiff, rightArmDiff,
         leftElbowDiff, rightElbowDiff,
         armError, elbowError,
+        meanArmDiff,
         adviceText
       };
     }
@@ -271,15 +274,6 @@
       if (!frozenCanvas) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(frozenCanvas, 0, 0, canvas.width, canvas.height);
-    }
-
-    function drawPoint(p, color, radius = 5) {
-      ctx.save();
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
     }
 
     function drawIdealOverlay(evalData) {
@@ -300,6 +294,7 @@
       const rightUpperLen = distPx(rShoulder, rElbow);
       const rightForeLen = distPx(rElbow, rWrist);
 
+      // 画面座標上の理想線（左右外側へ45°）
       const idealLeftArm = -45;
       const idealRightArm = -135;
 
@@ -309,11 +304,13 @@
       const idealRightElbow = pointFromAngle(rS, rightUpperLen, idealRightArm);
       const idealRightWrist = pointFromAngle(idealRightElbow, rightForeLen, idealRightArm);
 
+      // 現在腕（緑）
       drawLine(lS, lE, "#00ff88", 6);
       drawLine(lE, lW, "#00ff88", 6);
       drawLine(rS, rE, "#00ff88", 6);
       drawLine(rE, rW, "#00ff88", 6);
 
+      // 理想腕（黄色点線）
       drawLine(lS, idealLeftElbow, "yellow", 4, [10, 8]);
       drawLine(idealLeftElbow, idealLeftWrist, "yellow", 4, [10, 8]);
 

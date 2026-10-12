@@ -6,7 +6,7 @@ export class Camera{
  async models(){
  if(!this.modelPromise)this.modelPromise=(async()=>{const {FilesetResolver,PoseLandmarker,FaceLandmarker}=await import(/* @vite-ignore */ `${CDN}/vision_bundle.mjs`);const files=await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
  this.pose=await PoseLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:`${MODEL}pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task`},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5});
- this.facePromise=FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:`${MODEL}face_landmarker/float16/1/face_landmarker.task`},runningMode:'VIDEO',numFaces:1,outputFaceBlendshapes:true}).then(face=>{if(this.disposed)face.close();else this.face=face;}).catch(()=>{this.onStatus('顔モデルを読み込めません。姿勢評価は利用できます');});})();
+ this.facePromise=FaceLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:`${MODEL}face_landmarker/face_landmarker/float16/1/face_landmarker.task`},runningMode:'VIDEO',numFaces:1,outputFaceBlendshapes:true}).then(face=>{if(this.disposed)face.close();else this.face=face;}).catch(()=>{this.onStatus('顔モデルを読み込めません。姿勢評価は利用できます');});})();
  try{await this.modelPromise;}catch(e){this.modelPromise=null;throw e;}
  }
  async start(){if(this.starting||this.running)return;this.starting=true;const generation=++this.generation;

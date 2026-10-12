@@ -9,6 +9,8 @@
 - ブラウザ統合テストのカメラはChromium仮想カメラ、推論は明示的な模擬モデル。実人物／実モデルでの精度・速度を証明するものではありません。
 - CDN上のTasks Vision 0.10.21 JS、GoogleのPoseモデル、既存公開URLへのTLS検証付きHTTPアクセスは200。
 
+- TLS検証付きで取得した公式JS／WASM／Pose・Faceモデルをブラウザへ供給し、実モデルの初期化・仮想カメラ入力の人物未検出・カメラ停止を確認。モデルのMD5は配信元のx-goog-hashと照合済み。通常ブラウザからCDNへのTLS接続の確認とは別です。
+
 ## 未検証・制限
 
 - 実カメラ、PC Chrome／iPhone Safari／Android Chrome実機のカメラ許可・回転・実Pose／Face精度・FPS。

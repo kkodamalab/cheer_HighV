@@ -67,11 +67,11 @@ MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを�
 |playwright.config.js|ブラウザテスト設定|
 |package.json / package-lock.json|開発ツールと固定依存関係|
 |.github/workflows/check.yml|PRで単体・ブラウザテストとビルド|
-|.github/workflows/pages.yml|main更新時にGitHub Pagesへdistを公開|
+|.nojekyll|GitHub Pagesで静的ES Modulesをそのまま配信|
 |.gitignore|依存・ビルド・テスト出力の除外|
 
 ## 公開
 
-GitHub PagesのSourceは **GitHub Actions** を選択してください。mainへのマージ時にPages workflowがビルド・公開します。予定URL： https://kkodamalab.github.io/cheer_HighV/
+既存のGitHub Pages設定（mainブランチのルート）を継続します。ブラウザで直接動作する標準ES ModulesとCSSを配置し、`.nojekyll` で静的配信します。mainマージ後にGitHubの既存pages-build-deploymentが公開します。Viteのdistも同じベースパスで別途ビルド検証しています。Pages設定変更APIは統合トークン権限で403でしたが、この公開方式では設定変更は不要です。公開URL： https://kkodamalab.github.io/cheer_HighV/
 
 実カメラとPC Chrome／iPhone Safari／Android Chromeの実機検証は仮想カメラテストとは別に必要です。最新の実行結果と公開状態は `VALIDATION.md` を参照してください。

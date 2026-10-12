@@ -1,4 +1,3 @@
-import './styles/main.css';
 import {VARIABLES,measure} from './evaluation/angles.js';
 import {createPose,presets} from './evaluation/pose-presets.js';
 import {evaluate} from './evaluation/scoring.js';

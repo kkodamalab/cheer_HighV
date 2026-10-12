@@ -17,5 +17,5 @@ export function poseFigure(id) {
   const { head, limbs } = figurePoints(id);
   const point = p => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
   const paths = limbs.map(l => `M${point(l.shoulder)}L${point(l.elbow)}L${point(l.wrist)}M${point(l.hip)}L${point(l.knee)}L${point(l.ankle)}`).join('');
-  return `<svg viewBox="0 0 140 140" aria-hidden="true" class="pose-figure"><circle cx="${head.x}" cy="${head.y}" r="${head.radius}" fill="currentColor"/><path d="M56 40H84${paths}" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>${limbs.map(l => `<circle cx="${l.wrist.x}" cy="${l.wrist.y}" r="4" fill="currentColor"/>`).join('')}</svg>`;
+  return `<svg viewBox="0 0 140 140" aria-hidden="true" class="pose-figure"><circle cx="${head.x}" cy="${head.y}" r="${head.radius}" fill="currentColor"/><path d="M70 29V70M56 40H84${paths}" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>${limbs.map(l => `<circle cx="${l.wrist.x}" cy="${l.wrist.y}" r="4" fill="currentColor"/>`).join('')}</svg>`;
 }

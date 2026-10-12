@@ -41,7 +41,15 @@ npm run test:browser
 
 ## モデル・プライバシー・制限
 
-MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを使用。Poseは1インスタンスを再利用し、Faceは最大5Hz、静止画時は再評価します。Face読み込みに失敗してもPoseを利用できます。モデル読み込み中の二重開始は防止し、画面遷移ではモデルをcloseします。
+MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを使用。PoseはVIDEO、FaceはIMAGEモードで動作します。Faceは最大5Hz、静止画時は必ず再評価。入力領域の切り替えによる追跡状態の混同を避けます。
+
+カメラには1920×1080・30fpsをidealで要求し、端末が対応しない場合は利用可能な解像度になります。Poseの0〜10番顔点から、visibility 0.45以上の点を4点以上使い、横幅×1.8／縦幅×3.5の大きい方を一辺とする余白付き正方形を切り出します。端で範囲を補正し、原画像の画素を同じ解像度のcanvasへコピーします。単純な拡大で情報を復元する処理は行いません。
+
+切り出しから表情特徴量を取得できない場合は、そのフレームの元画像で再試行。切り出し成功時も1秒ごとに元画像を比較します。DEBUGを開いている間と静止撮影時は両方式を同じフレームで比較します。両方成功した場合は切り出しを採用し、スコアの高い方を選ぶ処理はしません。Pose顔点がない近距離撮影でも元画像だけでFaceを評価します。PoseとFaceの初期化・推論エラーを別々に扱い、一方の失敗で他方を止めません。
+
+撮影画面のSMILE SCORE下に顔モデル初期化中／初期化エラー／推論エラー／顔未検出／検出成功を表示します。DEBUGには実際のカメラ解像度、顔領域の原画素数、切り出しと元画像それぞれの検出状態・スコア・推論時間・4つのBlendshape値を表示。「顔モデルを再初期化」でカメラやPoseを止めずに再試行できます。元画像の比較時刻も表示するので、通常モードの前回サンプルを現在フレームと混同しないようにしてください。
+
+小さな顔領域（96px未満の一辺）には注意表示しますが、この値は検出可否の正式な境界ではありません。横顔、遮蔽、暗さ、画素不足では切り出しても検出できないことがあります。顔未検出は0点ではなく測定不可として扱います。モデル読み込み中の二重開始は防止し、画面遷移ではモデルをcloseします。
 
 カメラ画像はネット送信せず、端末内で推論します。初回は `cdn.jsdelivr.net` と `storage.googleapis.com` からコード・WASM・モデルを取得するためネット接続が必要です。クリック／ドラムは端末内合成、VOICEは端末の音声機能に依存します。VOICEの完全オフライン動作は端末の音声インストール状態次第です。完全オフラインでのモデル初回読み込みは対応していません。
 
@@ -57,13 +65,18 @@ MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを�
 |src/evaluation/angles.js|縦横比補正、関節角、14指標、笑顔計算|
 |src/evaluation/scoring.js|重み付け、測定不可、アドバイス|
 |src/evaluation/pose-presets.js|4プリセットとカスタム初期設定|
-|src/tracking/camera.js|Pose／Face読み込み、カメラ、推論、解放|
+|src/tracking/camera.js|モデルとカメラ、独立したPose／Face、解放|
+|src/tracking/face.js|顔領域抽出、Face初期化・再初期化、原画像フォールバック、診断|
+|src/components/face-debug.js|顔検出状態・処理時間・Blendshapeの診断表示|
+|src/components/pose-figure.js|約7頭身、関節位置を明示した4ポーズSVG|
 |src/tracking/draw.js|現在・基準・目標ラインの描画|
 |src/audio/countdown.js|終了時刻基準のタイマーとキャンセル|
 |src/audio/rhythm.js|Web Audioリズム・音声カウント|
 |src/storage/store.js|localStorage、設定検証、CSV／JSONダウンロード|
 |tests/*.test.js|模擬ランドマーク・タイマー・リソースの単体テスト|
 |tests/browser/app.spec.js|PC・スマホ幅の操作と仮想カメラ統合テスト|
+|tests/face.test.js|顔切り出し、独立動作、再初期化、人体比率のテスト|
+|tests/real-model-smoke.mjs|公式写真・公式モデルによる任意の実推論比較（画像はリポジトリへ保存しない）|
 |playwright.config.js|ブラウザテスト設定|
 |package.json / package-lock.json|開発ツールと固定依存関係|
 |.github/workflows/check.yml|PRで単体・ブラウザテストとビルド|
@@ -75,3 +88,6 @@ MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを�
 既存のGitHub Pages設定（mainブランチのルート）を継続します。ブラウザで直接動作する標準ES ModulesとCSSを配置し、`.nojekyll` で静的配信します。mainマージ後にGitHubの既存pages-build-deploymentが公開します。Viteのdistも同じベースパスで別途ビルド検証しています。Pages設定変更APIは統合トークン権限で403でしたが、この公開方式では設定変更は不要です。公開URL： https://kkodamalab.github.io/cheer_HighV/
 
 実カメラとPC Chrome／iPhone Safari／Android Chromeの実機検証は仮想カメラテストとは別に必要です。最新の実行結果と公開状態は `VALIDATION.md` を参照してください。
+
+
+実モデルの写真比較は開発サーバーを起動してから `CML_CHROMIUM=/usr/bin/chromium node tests/real-model-smoke.mjs` で実行できます。公式ファイルをTLS検証付きで取得し、モデルは配信元MD5も確認します。結果をtest-results/real-model-results.jsonへ保存します。実カメラではありません。全身写真で顔未検出なら、全身の笑顔評価の成功としては数えません。

@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {Rhythm} from '../src/audio/rhythm.js';
+test('metronome/drum/off/voice and audio cleanup',async()=>{
+ let stopped=0,resumed=0,spoken=0;const counts={osc:0,noise:0};const param={setValueAtTime(){},exponentialRampToValueAtTime(){}};const source=()=>({connect(){},start(){},stop(){stopped++;},frequency:param});
+ globalThis.window={AudioContext:class{currentTime=0;sampleRate=1000;destination={};async resume(){resumed++;}createGain(){return{connect(){},gain:param};}createOscillator(){counts.osc++;return source();}createBuffer(){return{getChannelData:()=>new Float32Array(100)}}createBufferSource(){counts.noise++;return source();}createBiquadFilter(){return{connect(){},frequency:{value:0}}}},speechSynthesis:{}};
+ globalThis.speechSynthesis={cancel(){},speak(){spoken++;}};globalThis.SpeechSynthesisUtterance=class{constructor(text){this.text=text;}};
+ const r=new Rhythm();await r.unlock();assert.equal(resumed,1);const s={rhythm:'METRONOME',bpm:120,volume:.5};r.start(s);r.sound(0,0);assert.equal(counts.osc,1);r.stop();assert.equal(stopped,2);r.start({...s,rhythm:'DRUM'});r.sound(0,1);assert.equal(counts.noise,1);r.stop();assert.equal(stopped,4);r.start({...s,rhythm:'VOICE'});r.count(3);assert.equal(spoken,1);r.start({...s,rhythm:'OFF'});r.count(2);assert.equal(spoken,1);r.stop();
+});

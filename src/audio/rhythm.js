@@ -1,0 +1,8 @@
+export class Rhythm{
+ async unlock(){const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;this.ctx??=new AC();await this.ctx.resume();}
+ start(settings){this.stop();this.settings=settings;if(settings.rhythm==='OFF'||settings.rhythm==='VOICE'||!this.ctx)return;this.next=this.ctx.currentTime;this.beat=0;this.timer=setInterval(()=>{while(this.next<this.ctx.currentTime+.12){this.sound(this.next,this.beat++);this.next+=60/settings.bpm;}},25);}
+ sound(t,beat){const c=this.ctx,s=this.settings;const gain=c.createGain();gain.connect(c.destination);gain.gain.setValueAtTime(s.volume*.4,t);gain.gain.exponentialRampToValueAtTime(.001,t+.09);let source;
+ if(s.rhythm==='DRUM'&&beat%4!==0){const buffer=c.createBuffer(1,c.sampleRate*.1,c.sampleRate);const d=buffer.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=(Math.random()*2-1);source=c.createBufferSource();source.buffer=buffer;const filter=c.createBiquadFilter();filter.type='highpass';filter.frequency.value=beat%2?7000:1500;source.connect(filter);filter.connect(gain);}else{source=c.createOscillator();source.frequency.setValueAtTime(s.rhythm==='DRUM'?130:1000,t);source.frequency.exponentialRampToValueAtTime(s.rhythm==='DRUM'?45:600,t+.08);source.connect(gain);}source.start(t);source.stop(t+.1);this.sources??=new Set();this.sources.add(source);source.onended=()=>this.sources.delete(source);}
+ count(n){if(this.settings?.rhythm==='VOICE'&&'speechSynthesis'in window){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(String(n));u.lang='ja-JP';u.volume=this.settings.volume;speechSynthesis.speak(u);}}
+ stop(){clearInterval(this.timer);for(const s of this.sources??[])try{s.stop();}catch{}this.sources?.clear();if('speechSynthesis'in window)speechSynthesis.cancel();}
+}

@@ -1,0 +1,77 @@
+# Cheer Motion Lab
+
+既存のHigh V評価を拡張した、ブラウザ内で処理するチアダンス姿勢練習アプリです。Gravisの公式サービスではなく、ロゴ・写真は使用していません。独自SVGとレインボーUIを使用します。
+
+## 開発
+
+Node.js 22以上、npmを使用します。
+
+```sh
+npm ci
+npm run dev
+npm test
+npm run build
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+システムChromiumがある環境では `CML_CHROMIUM=/usr/bin/chromium npm run test:browser` も利用できます。クラウド環境のnpmキャッシュは `/tmp/cml-npm` を利用してください（`npm ci --cache /tmp/cml-npm`）。ビルドは `/cheer_HighV/` ベースで `dist/` に生成します。既存チェックアウトを使用し、作業用worktreeは不要です。
+
+## 操作マニュアル
+
+1. HOMEでHIGH V、LOW V、T MOTION、TOUCHDOWNを選択。CUSTOMで名前を入力すると設定画面を開きます。
+2. SETTINGSで指標を選択し、目標・許容誤差・重みを入力。スライダーと数値入力は同期します。任意の3点A–B–CでBを頂点とする関節内角も追加できます。変更は自動保存され、JSONで設定を移行できます。
+3. MANUALは数値登録。CAPTURE REFERENCEからカメラを開始し、全身と選択部位の検出を確認して「このポーズを基準として登録」を押します。目標値と33点を保存します。手動で目標を変更すると撮影した基準ラインを解除します。
+4. 秒数は0〜10、BPMは60〜180（5刻み）。METRONOME、DRUM、VOICE、OFFを選択し試聴できます。音量と撮影時停止も設定できます。ユーザー操作でAudioContextを開始します。
+5. HOME → スタート → カメラ開始 → カメラ許可。明るい場所で全身を映します。カメラに近すぎると手や足が検出できません。画面の左右は本人の左右です。表示の反転は計算に影響しません。
+6. 「撮影・評価」で撮影。0秒は即撮影、その他はperformance.now()の終了時刻を基準に撮影します。GO!と静止画が表示され、カメラトラックは停止します。「キャンセル／カメラ終了」はタイマー・音声・カメラを停止します。背景状態に移行すると撮影を中止します。
+7. 結果で指標ごとの実測／理想／誤差／スコアとアドバイスを確認。「もう一度評価」で再撮影。「記録保存」でこのブラウザに保存します。画像・ランドマーク・笑顔推移はそれぞれチェックした場合だけ記録に含めます。顔画像は初期状態では保存しません。
+8. RECORDSからCSV／JSON出力、個別削除、全削除。設定JSONはSETTINGSで入出力します。記録JSONには設定・検出状態・任意のランドマークとタイムスタンプ付き笑顔推移を含みます。CSVは評価内訳、JSONはすべての選択したデータを含みます。
+
+## 角度と採点
+
+- 腕挙上角：画像のピクセル座標に変換し `atan2(肩.y − 手首.y, |手首.x − 肩.x|)`。水平0°、上90°、下−90°。High Vは45°、Low Vは−45°、Tは0°、Touchdownは90°。**すべて暫定プリセット**です。
+- 関節内角：A–B–Cのベクトル内積から0〜180°。全角度は画像の縦横比を補正。左右反転は表示のみ。
+- 肩・耳のラインの傾きは水平からの絶対角、体幹は肩中点と股関節中点の垂直からの絶対角。左右腕の対称性は挙上角の差、脚の対称性は左右膝の内角差。
+- スコア = `max(0, 100 × (1 − |実測 − 目標| / 許容誤差))`。目標一致で100点、許容誤差以上で0点。
+- 総合 = 測定できた有効指標の `Σ(スコア × 重み) / Σ重み`。未選択、重み0、測定不可は分母・分子から除外。すべて測定不可／重み0なら総合も測定不可。検出率は選択指標の測定可能な割合です。
+- Poseのvisibilityが0.5未満の必要点、長さ0の角度、顔未検出は測定不可。顔未検出でもPose評価は続きます。
+- Smile Score = `100 × (0.4 mouthSmileLeft + 0.4 mouthSmileRight + 0.1 cheekSquintLeft + 0.1 cheekSquintRight)`。左右差 = `100 × |mouthSmileLeft − mouthSmileRight|`。幸福度や実際の感情の指標ではありません。
+- 現在スケルトンは緑、腕挙上誤差が許容範囲外なら赤。手動の黄色点線は登録目標の腕挙上と肘内角から生成。撮影した基準は保存した全身位置を描画します。各オーバーレイ、実測・理想値、反転を切り替えられます。
+
+## モデル・プライバシー・制限
+
+MediaPipe Tasks Vision **0.10.21**、Pose Landmarker Lite、Face Landmarkerを使用。Poseは1インスタンスを再利用し、Faceは最大5Hz、静止画時は再評価します。Face読み込みに失敗してもPoseを利用できます。モデル読み込み中の二重開始は防止し、画面遷移ではモデルをcloseします。
+
+カメラ画像はネット送信せず、端末内で推論します。初回は `cdn.jsdelivr.net` と `storage.googleapis.com` からコード・WASM・モデルを取得するためネット接続が必要です。クリック／ドラムは端末内合成、VOICEは端末の音声機能に依存します。VOICEの完全オフライン動作は端末の音声インストール状態次第です。完全オフラインでのモデル初回読み込みは対応していません。
+
+2D推定のため奥行き・斜め撮影・遮蔽・服装に影響されます。頭部・股関節は目安です。手動ラインは腕のみ（その他の指標は数値比較）、撮影基準は全身を表示します。記録はlocalStorage容量制限があり、画像保存が多いと失敗します。ブラウザごとに別データで、クラウド同期はありません。タイマー精度はイベントループと画面の表示状態に依存し、リアルタイム機器としての保証はありません。
+
+## ファイル構成
+
+|ファイル|役割|
+|---|---|
+|index.html|日本語ページ、モジュールのエントリー|
+|src/main.js|各画面、フォーム、撮影・結果・記録の操作|
+|src/styles/main.css|色変数、レインボーUI、レスポンシブ、低モーション対応|
+|src/evaluation/angles.js|縦横比補正、関節角、14指標、笑顔計算|
+|src/evaluation/scoring.js|重み付け、測定不可、アドバイス|
+|src/evaluation/pose-presets.js|4プリセットとカスタム初期設定|
+|src/tracking/camera.js|Pose／Face読み込み、カメラ、推論、解放|
+|src/tracking/draw.js|現在・基準・目標ラインの描画|
+|src/audio/countdown.js|終了時刻基準のタイマーとキャンセル|
+|src/audio/rhythm.js|Web Audioリズム・音声カウント|
+|src/storage/store.js|localStorage、設定検証、CSV／JSONダウンロード|
+|tests/*.test.js|模擬ランドマーク・タイマー・リソースの単体テスト|
+|tests/browser/app.spec.js|PC・スマホ幅の操作と仮想カメラ統合テスト|
+|playwright.config.js|ブラウザテスト設定|
+|package.json / package-lock.json|開発ツールと固定依存関係|
+|.github/workflows/check.yml|PRで単体・ブラウザテストとビルド|
+|.nojekyll|GitHub Pagesで静的ES Modulesをそのまま配信|
+|.gitignore|依存・ビルド・テスト出力の除外|
+
+## 公開
+
+既存のGitHub Pages設定（mainブランチのルート）を継続します。ブラウザで直接動作する標準ES ModulesとCSSを配置し、`.nojekyll` で静的配信します。mainマージ後にGitHubの既存pages-build-deploymentが公開します。Viteのdistも同じベースパスで別途ビルド検証しています。Pages設定変更APIは統合トークン権限で403でしたが、この公開方式では設定変更は不要です。公開URL： https://kkodamalab.github.io/cheer_HighV/
+
+実カメラとPC Chrome／iPhone Safari／Android Chromeの実機検証は仮想カメラテストとは別に必要です。最新の実行結果と公開状態は `VALIDATION.md` を参照してください。
